@@ -574,8 +574,19 @@ const ADMIN_PIN = "246810";
     const newRef={items,itemStatus,stores,dayOrder:DAY_FULL};
     try{ localStorage.setItem(REF_KEY,JSON.stringify(newRef)); }catch(e){}
     ref=newRef; buildIndexes(); resolvePharmacy(); runItemSearch();
-    downloadJSON("catalog.json", newRef);
-    alert("Catalog updated: "+Object.keys(items).length+" items, "+Object.keys(stores).length+" pharmacies.\n\nA file 'catalog.json' was downloaded. Upload it to your site (next to index.html) so your team gets the new items/pharmacies.");
+    const ni=Object.keys(items).length, ns=Object.keys(stores).length;
+    const cfg=loadGH();
+    if(cfg&&cfg.owner&&cfg.repo&&cfg.token){
+      $("pubStatus").innerHTML="Publishing catalog\u2026";
+      publishCatalog(newRef).then(r=>{
+        renderPubStatus();
+        if(r.ok) alert("Catalog published to your team \u2713\n"+ni+" items, "+ns+" pharmacies.\nIt can take up to ~1 minute to show on their devices.");
+        else{ downloadJSON("catalog.json", newRef); alert("Couldn't publish the catalog automatically ("+r.msg+").\nA 'catalog.json' file was downloaded instead \u2014 upload it to your repo manually."); }
+      });
+    }else{
+      downloadJSON("catalog.json", newRef);
+      alert("Catalog updated on this device: "+ni+" items, "+ns+" pharmacies.\n\nA 'catalog.json' file was downloaded \u2014 upload it next to index.html so your team gets it.\nTip: set up Publish settings to make this automatic.");
+    }
   }
 
   /* ---------- helpers ---------- */
@@ -594,11 +605,23 @@ const ADMIN_PIN = "246810";
   function deb(fn,ms){ let t; return function(){ clearTimeout(t); t=setTimeout(fn,ms); }; }
 
   /* ---------- load published data (for the team) ---------- */
+  async function fetchJSON(url){ const r=await fetch(url,{cache:"no-store"}); if(!r.ok) throw new Error("HTTP "+r.status); return r.json(); }
+  async function loadPublishedCatalog(){
+    let manifest;
+    try{ manifest=await fetchJSON("catalog.json"); }catch(e){ return null; }
+    if(manifest && manifest.items && manifest.stores) return manifest; // old single-file format
+    if(manifest && manifest.itemChunks!=null && manifest.stores){
+      let items={};
+      for(let i=0;i<manifest.itemChunks;i++){
+        try{ Object.assign(items, await fetchJSON("catalog_items_"+i+".json")); }catch(e){}
+      }
+      return {items, itemStatus:manifest.itemStatus||{}, stores:manifest.stores, dayOrder:manifest.dayOrder||DAY_FULL};
+    }
+    return null;
+  }
   async function fetchPublished(){
-    // catalog first
-    try{ const r=await fetch("catalog.json",{cache:"no-store"}); if(r.ok){ const j=await r.json();
-      if(j&&j.items&&j.stores){ ref=j; try{localStorage.setItem(REF_KEY,JSON.stringify(j));}catch(e){} } } }
-    catch(e){ try{ const c=JSON.parse(localStorage.getItem(REF_KEY)); if(c&&c.items&&c.stores) ref=c; }catch(_){} }
+    const c=await loadPublishedCatalog();
+    if(c&&c.items&&c.stores){ ref=c; try{localStorage.setItem(REF_KEY,JSON.stringify(c));}catch(e){} }
     buildIndexes();
     // stock
     try{ const r=await fetch("stock.json",{cache:"no-store"}); if(r.ok){ const j=await r.json();
@@ -644,8 +667,21 @@ const ADMIN_PIN = "246810";
       const j=await r.json().catch(()=>({})); return {ok:false,msg:"GitHub "+r.status+(j.message?": "+j.message:"")};
     }catch(e){ return {ok:false,msg:"network error"}; }
   }
-
-  /* ---------- settings modal ---------- */
+  async function publishCatalog(newRef){
+    const items=newRef.items, keys=Object.keys(items), CHUNK=6000;
+    const nChunks=Math.max(1, Math.ceil(keys.length/CHUNK));
+    const manifest={v:2, itemChunks:nChunks, stores:newRef.stores, itemStatus:newRef.itemStatus, dayOrder:newRef.dayOrder};
+    let res=await publishToGitHub("catalog.json", manifest);
+    if(!res.ok) return {ok:false, msg:res.msg+" (manifest)"};
+    for(let i=0;i<nChunks;i++){
+      const slice={}; const end=Math.min((i+1)*CHUNK, keys.length);
+      for(let j=i*CHUNK;j<end;j++){ slice[keys[j]]=items[keys[j]]; }
+      $("pubStatus").innerHTML="Publishing catalog\u2026 "+(i+1)+"/"+nChunks;
+      res=await publishToGitHub("catalog_items_"+i+".json", slice);
+      if(!res.ok) return {ok:false, msg:res.msg+" (part "+(i+1)+")"};
+    }
+    return {ok:true, chunks:nChunks};
+  }
   function openSettings(){
     if(!isAdmin) return;
     const cfg=loadGH()||{};
