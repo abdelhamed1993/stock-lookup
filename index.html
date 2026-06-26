@@ -388,6 +388,8 @@ const TEAM_PASS = "forsan+1";
 
 (function(){
   const STOCK_KEY="mb52_stock_v3", REF_KEY="ref_catalog_v3", STR_KEY="ui_strings_v3", ADMIN_KEY="is_admin_v3", GH_KEY="gh_publish_v3", LOGIN_KEY="logged_in_v3";
+  const $=id=>document.getElementById(id);
+  const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
   /* ---------- login gate ---------- */
   function checkLogin(){
@@ -409,8 +411,6 @@ const TEAM_PASS = "forsan+1";
   const DAY_SHORT={Saturday:"Sat",Sunday:"Sun",Monday:"Mon",Tuesday:"Tue",Wednesday:"Wed",Thursday:"Thu"};
   const JS_TO_FULL={6:"Saturday",0:"Sunday",1:"Monday",2:"Tuesday",3:"Wednesday",4:"Thursday",5:null};
   const todayFull=JS_TO_FULL[new Date().getDay()];
-  const $=id=>document.getElementById(id);
-  const esc=s=>String(s).replace(/[&<>"']/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
 
   /* ---------- editable strings ---------- */
   const defaultStrings={};
