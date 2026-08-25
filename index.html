@@ -690,7 +690,7 @@ const TEAM_PASS = "forsan+1";
   }
 
   /* ---------- GitHub publish ---------- */
-  function loadGH(){ return {owner:"abdelhamed1993",repo:"stock-lookup",branch:"main",folder:"",token:atob("Z2l0aHViX3BhdF8xMUNHWjZUSFEwVVZLajl0RW5kVjRxX0s0MUNySDNiTDk5VEplaGlwVzE4MUdkWTZEVUlGaXlQNUtGSTNSeE9pOWlCWUVTT1pYN0lacm5GblE5")}; }
+  function loadGH(){ var t=""; try{var c=JSON.parse(localStorage.getItem(GH_KEY)); if(c&&c.token) t=c.token;}catch(e){} return {owner:"abdelhamed1993",repo:"stock-lookup",branch:"main",folder:"",token:t}; }
   function saveGH(cfg){ localStorage.setItem(GH_KEY, JSON.stringify(cfg)); }
   function renderPubStatus(){
     const cfg=loadGH(); const el=$("pubStatus");
