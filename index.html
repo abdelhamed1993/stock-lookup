@@ -144,6 +144,12 @@ body{background:var(--bg);color:var(--ink);
 .badge{display:inline-block;font-size:10px;font-weight:800;letter-spacing:.03em;padding:2px 7px;border-radius:6px;margin-left:7px;vertical-align:middle}
 .badge.special{background:#FDF1D6;color:#92670A}
 .badge.device{background:#E7EEFA;color:#2E4FA0}
+.badge.delisted{background:#EDEFF1;color:#5A6673}
+.badge.unicharm{background:#F1E9FB;color:#6D3FB5}
+.badge.other{background:#E4F6EE;color:#0B7A55}
+.ph-closed{display:inline-block;font-size:11px;font-weight:800;letter-spacing:.04em;
+  text-transform:uppercase;padding:3px 10px;border-radius:999px;margin-left:9px;
+  background:#FCE9E9;color:#B42318;vertical-align:middle}
 .whs{display:flex;gap:10px;flex:0 0 auto}
 .who{text-align:center;min-width:74px;border-radius:10px;padding:9px 11px;background:var(--surface-2);border:1.5px solid transparent}
 .who.active{border-color:var(--teal);background:#fff;box-shadow:0 0 0 3px var(--teal-soft)}
@@ -513,9 +519,15 @@ const TEAM_PASS = "forsan+1";
   function renderPhCard(){
     if(!activePh){ phCard.className="ph-card"; phCard.innerHTML=""; return; }
     const s=activePh;
+    if(s.closed){
+      phCard.innerHTML='<div class="ph-head"><span class="ph-code">'+esc(s.code)+'</span><span class="ph-closed">'+esc(S("vClosed")||"Closed")+'</span></div>';
+      phCard.className="ph-card show"; return;
+    }
     let kv='<div><div class="item-k">'+esc(S("kWh")||"Warehouse")+'</div><div class="item-v wh">'+esc(s.wh||"?")+'</div></div>';
     if(s.city) kv+='<div><div class="item-k">'+esc(S("kCity")||"City")+'</div><div class="item-v">'+esc(s.city)+'</div></div>';
     if(s.type) kv+='<div><div class="item-k">'+esc(S("kType")||"Type")+'</div><div class="item-v type">'+esc(s.type)+'</div></div>';
+    if(s.supervisor) kv+='<div><div class="item-k">'+esc(S("kSup")||"Supervisor")+'</div><div class="item-v">'+esc(s.supervisor)+'</div></div>';
+    if(s.age) kv+='<div><div class="item-k">'+esc(S("kAge")||"Age")+'</div><div class="item-v">'+esc(s.age)+'</div></div>';
     let days="";
     if(s.days&&s.days.length){ let cells="";
       DAY_FULL.forEach(d=>{ const on=s.days.includes(d), t=(d===todayFull);
@@ -551,11 +563,30 @@ const TEAM_PASS = "forsan+1";
     let ctx= isActive? '<span class="ctx">'+esc(phCode)+'</span>':'';
     return '<div class="who '+cls+(isActive?' active':'')+'"><span class="wl">WH '+wh+'</span><div class="qty num">'+unr+'</div><span class="st">'+esc(label)+'</span>'+extra+ctx+'</div>';
   }
+  /* Item status badges. The catalog's STATUS column is typed by hand, so match a
+     normalized value (trimmed, upper-cased, single-spaced) on a prefix instead of
+     an exact string — that way DEVICE/DEVICES and any casing all resolve. Anything
+     unrecognized still gets a badge showing the raw value, so a new status is
+     visible rather than silently dropped. */
+  const STATUS_BADGES=[
+    {re:/^SPECIAL/,           cls:"special",  key:"bSpecial",  text:"Special"},
+    {re:/^EXPENSIVE ?DEVICE/, cls:"device",   key:"bDevice",   text:"Expensive device"},
+    {re:/^DELISTED/,          cls:"delisted", key:"bDelisted", text:"Delisted"},
+    {re:/^UNICHARM/,          cls:"unicharm", key:"bUnicharm", text:"Unicharm"}
+  ];
+  function statusBadge(status){
+    const raw=String(status==null?"":status).trim();
+    if(!raw) return "";
+    const s=raw.toUpperCase().replace(/\s+/g," ");
+    for(let i=0;i<STATUS_BADGES.length;i++){
+      const b=STATUS_BADGES[i];
+      if(b.re.test(s)) return '<span class="badge '+b.cls+'">'+esc(S(b.key)||b.text)+'</span>';
+    }
+    return '<span class="badge other">'+esc(raw)+'</span>';
+  }
   function renderItem(code){
     const name=ref.items[code]||"(no name)";
-    const status=ref.itemStatus[code]; let badge="";
-    if(status==="SPECIAL") badge='<span class="badge special">'+esc(S("bSpecial")||"Special")+'</span>';
-    else if(status==="EXPENSIVE DEVICE") badge='<span class="badge device">'+esc(S("bDevice")||"Expensive device")+'</span>';
+    const badge=statusBadge((ref.itemStatus||{})[code]);
     const aWh=activePh?activePh.wh:null;
     let order=["1100","2100"]; if(aWh==="2100") order=["2100","1100"];
     const blocks=order.map(w=>whBlock(w,code, aWh===w, activePh?activePh.code:"")).join("");
@@ -618,13 +649,48 @@ const TEAM_PASS = "forsan+1";
     const stypeRows=pick(n=>norm(n).includes("store")&&norm(n).includes("type"));
     const itypeRows=pick(n=>norm(n).includes("item")&&norm(n).includes("type"));
     const delRows=pick(n=>norm(n).includes("deliver"));
-    if(!itemRows||!plantRows) throw new Error("Catalog must contain ITEM and PLANT/WH sheets.");
+    /* Store master sheet: located by its HEADER ROW rather than the tab name, so the
+       tab can be called anything ("Sheet1", "Store master file", ...). It supersedes
+       the older PLANT/WH + STORE TYPE pair, which is still read when no master exists. */
+    const hkey=s=>String(s==null?"":s).trim().toLowerCase().replace(/[\s_]+/g," ");
+    let masterRows=null, MH=null;
+    for(let si=0;si<names.length;si++){
+      const rows=XLSX.utils.sheet_to_json(wb.Sheets[names[si]],{header:1,raw:true,blankrows:false});
+      if(!rows||!rows.length) continue;
+      const map={}; (rows[0]||[]).forEach((c,ci)=>{ const k=hkey(c); if(k&&!(k in map)) map[k]=ci; });
+      if("plant" in map && "supervisor" in map){ masterRows=rows; MH=map; break; }
+    }
+    if(!itemRows||(!plantRows&&!masterRows)) throw new Error("Catalog must contain an ITEM sheet and either a Store master sheet or PLANT/WH.");
     const items={},itemStatus={},stype={},stores={};
     for(let i=1;i<itemRows.length;i++){ const r=itemRows[i]; if(!r||r[0]==null)continue; items[String(r[0]).trim()]=r[1]!=null?String(r[1]).trim():""; }
     if(itypeRows) for(let i=1;i<itypeRows.length;i++){ const r=itypeRows[i]; if(!r||r[0]==null)continue; if(r[2]!=null&&String(r[2]).trim()) itemStatus[String(r[0]).trim()]=String(r[2]).trim(); }
     if(stypeRows) for(let i=1;i<stypeRows.length;i++){ const r=stypeRows[i]; if(!r||r[0]==null)continue; stype[String(r[0]).trim()]=r[1]!=null?String(r[1]).trim():""; }
-    for(let i=1;i<plantRows.length;i++){ const r=plantRows[i]; if(!r||r[0]==null)continue; const c=String(r[0]).trim();
-      stores[c]={city:r[1]!=null?String(r[1]).trim():"",wh:r[2]!=null?String(r[2]).trim():"",type:stype[c]||"",days:[]}; }
+    if(masterRows){
+      /* Excel hands dates back as serial numbers under raw:true; store a readable one. */
+      const xdate=v=>{ if(v instanceof Date) return v.toISOString().slice(0,10);
+        if(typeof v==="number"&&v>0) return new Date(Date.UTC(1899,11,30)+Math.round(v)*864e5).toISOString().slice(0,10);
+        return String(v==null?"":v).trim(); };
+      let iOpen = MH["opening date"];
+      if(iOpen==null) for(const k in MH){ if(k.indexOf("openin")===0){ iOpen=MH[k]; break; } }
+      /* "age" is matched exactly so it can never collide with "age in days" */
+      const iPlant=MH["plant"]!=null?MH["plant"]:0, iCity=MH["city"], iWh=MH["wh"],
+            iType=MH["store type"], iSup=MH["supervisor"], iAge=MH["age"],
+            iArea=MH["area name"], iMgr=MH["area manager"], iHead=MH["head"];
+      for(let i=1;i<masterRows.length;i++){
+        const r=masterRows[i]; if(!r||r[iPlant]==null) continue;
+        const c=String(r[iPlant]).trim(); if(!c) continue;
+        const val=j=>(j==null||r[j]==null)?"":String(r[j]).trim();
+        const shown=[iCity,iWh,iType,iSup,iAge];
+        if(shown.some(j=>/^closed$/i.test(val(j)))){ stores[c]={closed:true,city:"",wh:"",type:"",days:[]}; continue; }
+        stores[c]={city:val(iCity),wh:val(iWh),type:val(iType),
+                   supervisor:val(iSup),age:val(iAge),
+                   area:val(iArea),manager:val(iMgr),head:val(iHead),
+                   opened:iOpen==null?"":xdate(r[iOpen]),days:[]};
+      }
+    }else{
+      for(let i=1;i<plantRows.length;i++){ const r=plantRows[i]; if(!r||r[0]==null)continue; const c=String(r[0]).trim();
+        stores[c]={city:r[1]!=null?String(r[1]).trim():"",wh:r[2]!=null?String(r[2]).trim():"",type:stype[c]||"",days:[]}; }
+    }
     if(delRows&&delRows.length>3){
       let whRow=-1,dayRow=-1; const lows=DAY_FULL.map(d=>d.toLowerCase());
       for(let i=0;i<Math.min(delRows.length,6);i++){
@@ -640,7 +706,7 @@ const TEAM_PASS = "forsan+1";
           dayCols.forEach(dc=>{ const v=row[dc.col]; if(v==null)return; const code=String(v).trim().toUpperCase(); if(!code)return;
             (sdays[code]=sdays[code]||{days:new Set(),wh:whFor(dc.col)}).days.add(dc.day); }); }
         for(const code in sdays){ const days=DAY_FULL.filter(d=>sdays[code].days.has(d));
-          if(stores[code]){ stores[code].days=days; if(!stores[code].wh) stores[code].wh=sdays[code].wh; }
+          if(stores[code]){ if(!stores[code].closed){ stores[code].days=days; if(!stores[code].wh) stores[code].wh=sdays[code].wh; } }
           else stores[code]={city:"",wh:sdays[code].wh||"",type:stype[code]||"",days}; }
       }
     }
