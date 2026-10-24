@@ -613,15 +613,34 @@ const TEAM_PASS = "forsan+1";
     const ws=wb.Sheets[wb.SheetNames[0]];
     const rows=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,blankrows:false});
     if(!rows.length) throw new Error("File is empty.");
-    const head=rows[0].map(h=>String(h==null?"":h).trim().toLowerCase());
+    /* SAP sometimes puts non-breaking or doubled spaces inside header cells, which
+       makes an exact compare miss a column that looks correct on screen. */
+    const hnorm=s=>String(s==null?"":s).replace(/[\u00A0\u2007\u202F]/g," ").replace(/\s+/g," ").trim().toLowerCase();
+    const head=(rows[0]||[]).map(hnorm);
     const find=(...names)=>{ for(const n of names){ const i=head.indexOf(n); if(i>=0)return i; } return -1; };
-    let cP=find("plant"),cM=find("material"),cU=find("unrestricted"),cT=find("transit and transfer","transit & transfer","transit");
+    /* MB52 pairs each quantity with a currency column of a near-identical name
+       ("Transit and Transfer" vs "Val. in Trans./Tfr"), so never match a value column. */
+    const findLoose=re=>{ for(let i=0;i<head.length;i++){ const t=head[i];
+      if(re.test(t)&&!/\b(value|val|amount|amt|curr|price|cost)\b/.test(t)) return i; } return -1; };
+    let cP=find("plant"),cM=find("material"),cU=find("unrestricted");
+    let cT=find("transit and transfer","transit & transfer","transit","stock in transit","in transit");
+    if(cT<0) cT=findLoose(/transit|transfer/);
     if(cP<0||cM<0||cU<0){ cP=0;cM=1;cU=2;cT=4; }
-    const map={}; let n=0;
+    /* An item occupies one row per storage location, and SAP splits the quantities
+       across them: one row can carry the unrestricted stock and another the in-transit
+       stock for the same item. Accumulate every row — assigning instead of adding keeps
+       only the last row and silently discards the rest. */
+    const map={}; let n=0, nTr=0;
     for(let i=1;i<rows.length;i++){ const r=rows[i]; if(!r||r[cP]==null||r[cM]==null) continue;
       const p=String(r[cP]).trim(), m=String(r[cM]).trim(); if(!p||!m) continue;
-      map[p+"|"+m]=[Math.round(Number(r[cU])||0), cT>=0?Math.round(Number(r[cT])||0):0]; n++; }
+      const k=p+"|"+m, u=Math.round(Number(r[cU])||0), t=cT>=0?Math.round(Number(r[cT])||0):0;
+      if(map[k]){ map[k][0]+=u; map[k][1]+=t; } else map[k]=[u,t];
+      if(t>0) nTr++; n++; }
     if(!n) throw new Error("No stock rows found.");
+    /* Surface a missing transit column instead of silently publishing zeros. */
+    const trNote = cT<0
+      ? "\n\nHeads up: no transit column was found, so in-transit shows as 0.\nColumns seen: "+head.filter(Boolean).join(", ")
+      : (nTr===0 ? "\n\nNote: the transit column was read, but every row is 0." : "");
     stock={filename, dateLabel:(fileDate(filename)||nowLabel()), rows:n, map};
     try{ localStorage.setItem(STOCK_KEY,JSON.stringify(stock)); }catch(e){}
     renderFresh(); resolvePharmacy(); runItemSearch();
@@ -630,12 +649,12 @@ const TEAM_PASS = "forsan+1";
       $("freshTxt").textContent="Publishing…";
       publishToGitHub("stock.json", stock).then(res=>{
         renderFresh();
-        if(res.ok) alert("Done \u2713  Today's stock ("+stock.dateLabel+") is now live for your team.\nIt can take up to ~1 minute to show on their devices.");
+        if(res.ok) alert("Done \u2713  Today's stock ("+stock.dateLabel+") is now live for your team.\nIt can take up to ~1 minute to show on their devices."+trNote);
         else{ downloadJSON("stock.json",stock); alert("Couldn't publish automatically ("+res.msg+").\nA 'stock.json' file was downloaded instead \u2014 upload it to your repo manually."); }
       });
     }else{
       downloadJSON("stock.json", stock);
-      alert("Stock loaded (date "+stock.dateLabel+").\n\nA 'stock.json' file was downloaded \u2014 upload it next to index.html.\nTip: open Publish settings once to make this fully automatic.");
+      alert("Stock loaded (date "+stock.dateLabel+").\n\nA 'stock.json' file was downloaded \u2014 upload it next to index.html.\nTip: open Publish settings once to make this fully automatic."+trNote);
     }
   }
 
